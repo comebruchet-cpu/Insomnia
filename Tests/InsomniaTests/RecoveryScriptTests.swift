@@ -136,7 +136,7 @@ final class RecoveryScriptTests: XCTestCase {
         let r = try fx.run(fx.backstop)
 
         XCTAssertEqual(r.status, 0, r.stderr)
-        XCTAssertEqual(fx.calls(), ["pgrep -x Insomnia", "pmset -g batt"], "the fork reads the battery floor; nothing privileged runs")
+        XCTAssertEqual(fx.calls(), [])
         XCTAssertEqual(try String(contentsOf: fx.state, encoding: .utf8), dirty)
         XCTAssertTrue(fx.exists(fx.session))
     }
@@ -168,7 +168,8 @@ final class RecoveryScriptTests: XCTestCase {
         let r = try fx.run(fx.backstop)
 
         XCTAssertEqual(r.status, 0, r.stderr + fx.log())
-        XCTAssertEqual(fx.calls(), ["pgrep -x Insomnia", "pmset -g batt", "sudo -n \(fx.fakePmset) -a disablesleep 0", "ioreg -r -n IOPMrootDomain -d 1"])
+        XCTAssertEqual(fx.probes(), ["pgrep -x Insomnia", "pmset -g batt", "ioreg -r -n IOPMrootDomain -d 1"])
+        XCTAssertEqual(fx.calls(), ["sudo -n \(fx.fakePmset) -a disablesleep 0"])
         XCTAssertEqual(try fx.stateJSON()["sleepDisabledByUs"] as? Bool, false)
         XCTAssertFalse(fx.exists(fx.session), "a relaunch must not resume the session")
         XCTAssertTrue(fx.log().contains("below the 10% end floor"), fx.log())
@@ -183,7 +184,8 @@ final class RecoveryScriptTests: XCTestCase {
         let r = try fx.run(fx.backstop)
 
         XCTAssertEqual(r.status, 0, r.stderr)
-        XCTAssertEqual(fx.calls(), ["pgrep -x Insomnia"], "the running app owns the floor; the battery is not even read")
+        XCTAssertEqual(fx.probes(), ["pgrep -x Insomnia"], "the running app owns the floor; the battery is not even read")
+        XCTAssertEqual(fx.calls(), [])
         XCTAssertTrue(fx.exists(fx.session))
         XCTAssertEqual(try fx.stateJSON()["sleepDisabledByUs"] as? Bool, true)
     }
@@ -199,7 +201,8 @@ final class RecoveryScriptTests: XCTestCase {
             let r = try f.run(f.backstop)
 
             XCTAssertEqual(r.status, 0, label + r.stderr)
-            XCTAssertEqual(f.calls(), ["pgrep -x Insomnia", "pmset -g batt"], label)
+            XCTAssertEqual(f.probes(), ["pgrep -x Insomnia", "pmset -g batt"], label)
+            XCTAssertEqual(f.calls(), [], label)
             XCTAssertTrue(f.exists(f.session), label)
         }
     }
@@ -210,7 +213,7 @@ final class RecoveryScriptTests: XCTestCase {
         try fx.writeState(dirtySleep)
         fx.setBattery(percent: 25, onBattery: true)
         XCTAssertEqual(try fx.run(fx.backstop).status, 0, fx.log())
-        XCTAssertEqual(fx.calls().prefix(3), ["pgrep -x Insomnia", "pmset -g batt", "sudo -n \(fx.fakePmset) -a disablesleep 0"])
+        XCTAssertEqual(fx.calls(), ["sudo -n \(fx.fakePmset) -a disablesleep 0"])
         XCTAssertFalse(fx.exists(fx.session))
         XCTAssertTrue(fx.log().contains("below the 30% end floor"), fx.log())
 
@@ -221,7 +224,8 @@ final class RecoveryScriptTests: XCTestCase {
         try off.writeState(dirtySleep)
         off.setBattery(percent: 2, onBattery: true)
         XCTAssertEqual(try off.run(off.backstop).status, 0)
-        XCTAssertEqual(off.calls(), [], "an end floor of 0 reads nothing")
+        XCTAssertEqual(off.probes(), [], "an end floor of 0 reads nothing")
+        XCTAssertEqual(off.calls(), [])
         XCTAssertTrue(off.exists(off.session))
     }
 
@@ -234,7 +238,8 @@ final class RecoveryScriptTests: XCTestCase {
             f.setBatteryText(text)
 
             XCTAssertEqual(try f.run(f.backstop).status, 0, text)
-            XCTAssertEqual(f.calls(), ["pgrep -x Insomnia", "pmset -g batt"], text)
+            XCTAssertEqual(f.probes(), ["pgrep -x Insomnia", "pmset -g batt"], text)
+            XCTAssertEqual(f.calls(), [], text)
             XCTAssertTrue(f.exists(f.session), text)
         }
     }
@@ -249,12 +254,9 @@ final class RecoveryScriptTests: XCTestCase {
         let r = try fx.run(fx.backstop)
 
         XCTAssertEqual(r.status, 0, r.stderr + fx.log())
-        XCTAssertEqual(fx.calls(), [
-            "sudo -n \(fx.fakePmset) -a disablesleep 0",
-            "ioreg -r -n IOPMrootDomain -d 1",
-            "system_profiler SPDisplaysDataType",
-            "pmset sleepnow",
-        ], "sleep is asked last, after the guard is off and the journal published")
+        XCTAssertEqual(fx.calls(), ["sudo -n \(fx.fakePmset) -a disablesleep 0", "pmset sleepnow"],
+                       "sleep is asked last, after the guard is off and the journal published")
+        XCTAssertEqual(fx.probes(), ["ioreg -r -n IOPMrootDomain -d 1", "system_profiler SPDisplaysDataType"])
         XCTAssertFalse(fx.exists(fx.session))
         XCTAssertTrue(fx.log().contains("sleep requested (pmset sleepnow)"), fx.log())
     }
@@ -267,7 +269,8 @@ final class RecoveryScriptTests: XCTestCase {
         let r = try fx.run(fx.backstop)
 
         XCTAssertEqual(r.status, 0, r.stderr)
-        XCTAssertEqual(fx.calls(), ["ioreg -r -n IOPMrootDomain -d 1", "system_profiler SPDisplaysDataType", "pmset sleepnow"])
+        XCTAssertEqual(fx.calls(), ["pmset sleepnow"])
+        XCTAssertEqual(fx.probes(), ["ioreg -r -n IOPMrootDomain -d 1", "system_profiler SPDisplaysDataType"])
         XCTAssertFalse(fx.exists(fx.session))
     }
 
@@ -282,7 +285,7 @@ final class RecoveryScriptTests: XCTestCase {
             if !profilerMode.isEmpty { f.setMode("system_profiler", profilerMode) }
 
             XCTAssertEqual(try f.run(f.backstop).status, 0, label)
-            XCTAssertFalse(f.calls().contains("pmset sleepnow"), "\(label): \(f.calls())")
+            XCTAssertEqual(f.calls(), ["sudo -n \(f.fakePmset) -a disablesleep 0"], label)
             XCTAssertFalse(f.exists(f.session), label)
             XCTAssertTrue(f.log().contains("no sleep requested"), "\(label): \(f.log())")
         }
@@ -293,7 +296,8 @@ final class RecoveryScriptTests: XCTestCase {
         try fx.writeState(dirtySleep)
         fx.setLid(closed: true)
         XCTAssertEqual(try fx.run(fx.backstop, ["--force"]).status, 0)
-        XCTAssertFalse(fx.calls().contains("pmset sleepnow"), "install.sh and uninstall.sh end sessions on purpose: \(fx.calls())")
+        XCTAssertEqual(fx.calls(), ["sudo -n \(fx.fakePmset) -a disablesleep 0"], "install.sh and uninstall.sh end sessions on purpose")
+        XCTAssertEqual(fx.probes(), [], "a forced end reads neither the battery nor the lid")
 
         let failed = try ScriptFixture()
         defer { failed.destroy() }
@@ -303,6 +307,7 @@ final class RecoveryScriptTests: XCTestCase {
         failed.setMode("sudo", "fail")
         XCTAssertNotEqual(try failed.run(failed.backstop).status, 0)
         XCTAssertFalse(failed.calls().contains("pmset sleepnow"), "a request with the guard still on is refused, and the retry comes next minute: \(failed.calls())")
+        XCTAssertEqual(failed.probes(), [], "the lid is not even read while the journal is dirty")
     }
 
     func testBatteryFloorEndWithTheLidClosedSleeps() throws {
@@ -314,7 +319,7 @@ final class RecoveryScriptTests: XCTestCase {
         let r = try fx.run(fx.backstop)
 
         XCTAssertEqual(r.status, 0, r.stderr)
-        XCTAssertEqual(fx.calls().last, "pmset sleepnow", "\(fx.calls())")
+        XCTAssertEqual(fx.calls(), ["sudo -n \(fx.fakePmset) -a disablesleep 0", "pmset sleepnow"])
         XCTAssertFalse(fx.exists(fx.session))
     }
 
@@ -997,7 +1002,7 @@ final class RecoveryScriptTests: XCTestCase {
         let r = try fx.run(fx.backstop)
 
         XCTAssertEqual(r.status, 0, r.stderr + fx.log())
-        XCTAssertEqual(fx.calls(), ["pgrep -x Insomnia", "pmset -g batt"], "the fork reads the battery floor; nothing privileged runs")
+        XCTAssertEqual(fx.calls(), [])
         XCTAssertTrue(fx.exists(fx.session))
         XCTAssertEqual(try fx.stateJSON()["sleepDisabledByUs"] as? Bool, true)
     }
@@ -6653,7 +6658,7 @@ private final class ScriptFixture {
             "DEFAULTS": bin.appendingPathComponent("defaults").path,
             "DATE": bin.appendingPathComponent("date").path,
             "MV": bin.appendingPathComponent("mv").path,
-            "PGREP": bin.appendingPathComponent("pgrep").path,
+            "PGREP": bin.appendingPathComponent("pgrep-probe").path,
             "IOREG": bin.appendingPathComponent("ioreg").path,
             "SYSTEM_PROFILER": bin.appendingPathComponent("system_profiler").path,
             "LOCK_TIMEOUT_SECONDS": "1",
@@ -6809,6 +6814,7 @@ private final class ScriptFixture {
 
     private func writeFakes() throws {
         let calls = callsLog.path
+        let probes = probesLog.path
         let r = root.path
         // sudo: `-n <cmd>` is the pmset path and succeeds or fails by mode
         // without running anything. `rm`/`test` run unprivileged, and only
@@ -6929,7 +6935,7 @@ private final class ScriptFixture {
         // on AC power, charged), and `sleepnow` is recorded and succeeds.
         try writeFake("pmset", """
         if [[ "${1:-}" == -g && "${2:-}" == batt ]]; then
-          printf 'pmset -g batt\\n' >> "\(calls)"
+          printf 'pmset -g batt\\n' >> "\(probes)"
           if [[ -f "\(r)/batt.txt" ]]; then cat "\(r)/batt.txt"; else printf "Now drawing from 'AC Power'\\n -InternalBattery-0 (id=1)\\t100%%; charged; 0:00 remaining present: true\\n"; fi
           exit 0
         fi
@@ -6940,7 +6946,7 @@ private final class ScriptFixture {
         // ioreg: `-r -n IOPMrootDomain -d 1` prints the clamshell lines the
         // fork's backstop reads; ioreg.lid holds Yes or No (default No).
         try writeFake("ioreg", """
-        printf 'ioreg %s\\n' "$*" >> "\(calls)"
+        printf 'ioreg %s\\n' "$*" >> "\(probes)"
         lid="$(cat "\(r)/ioreg.lid" 2>/dev/null || echo No)"
         printf '+-o IOPMrootDomain  <class IOPMrootDomain>\\n    {\\n      "AppleClamshellState" = %s\\n      "AppleClamshellCausesSleep" = %s\\n    }\\n' "$lid" "$lid"
         exit 0
@@ -6949,7 +6955,7 @@ private final class ScriptFixture {
         // it: the built-in panel, then displays.external (default 0) more
         // on HDMI. Mode "fail" prints nothing and exits 1.
         try writeFake("system_profiler", """
-        printf 'system_profiler %s\\n' "$*" >> "\(calls)"
+        printf 'system_profiler %s\\n' "$*" >> "\(probes)"
         if [[ "$(cat "\(r)/system_profiler.mode" 2>/dev/null)" == fail ]]; then exit 1; fi
         n="$(cat "\(r)/displays.external" 2>/dev/null || echo 0)"
         printf 'Graphics/Displays:\\n\\n    Apple M5:\\n\\n      Displays:\\n        Color LCD:\\n          Display Type: Built-in Liquid Retina XDR Display\\n          Online: Yes\\n          Connection Type: Internal\\n'
@@ -7205,6 +7211,16 @@ private final class ScriptFixture {
             drop; exit 0 ;;
           *) echo "fake defaults: unexpected command '$cmd'" >&2; exit 2 ;;
         esac
+        """)
+        // pgrep-probe: the backstop's `pgrep -x Insomnia`, read-only, so it
+        // is logged with the probes. Same pgrep.mode as the pgrep below.
+        try writeFake("pgrep-probe", """
+        printf 'pgrep %s\\n' "$*" >> "\(probes)"
+        f="\(r)/pgrep.mode"
+        [[ -f "$f" ]] || exit 1
+        first="$(head -n 1 "$f")"
+        if (( $(wc -l < "$f") > 1 )); then tail -n +2 "$f" > "$f.next" && mv "$f.next" "$f"; fi
+        exit "${first:-1}"
         """)
         // pgrep: pgrep.mode holds one exit status per line, consumed in
         // order; the last line repeats. Default 1 (not running).
@@ -7582,6 +7598,15 @@ private final class ScriptFixture {
     /// the fixture the real codesign signs.
     func calls() -> [String] {
         guard let data = try? Data(contentsOf: callsLog) else { return [] }
+        return String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+    }
+
+    /// The read-only probes the fork's backstop makes (`pgrep`, `pmset -g
+    /// batt`, `ioreg`, `system_profiler`), kept apart from `calls()` so
+    /// every test of an action still sees exactly the actions.
+    var probesLog: URL { root.appendingPathComponent("probes.log") }
+    func probes() -> [String] {
+        guard let data = try? Data(contentsOf: probesLog) else { return [] }
         return String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
     }
 
