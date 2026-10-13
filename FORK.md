@@ -43,3 +43,14 @@ Upstream docs apply unless this file says otherwise.
 - Clamshell mode on an external display (upstream #97): this Mac has none.
 - Notarization: a locally built app has no quarantine flag, so Gatekeeper does
   not block it; a Developer ID is not worth 99 USD a year for one Mac.
+
+## Building
+
+This Mac has the Command Line Tools only, and they ship no SwiftUI macro
+plugin (`plugin for module 'SwiftUIMacros' not found`), so `swift build` fails
+here as it would for any SwiftUI app. Builds run on GitHub Actions in the fork
+[comebruchet-cpu/Insomnia](https://github.com/comebruchet-cpu/Insomnia):
+`gh workflow run release.yml -R comebruchet-cpu/Insomnia --ref main -f nightly=true`
+tests on macos-26, builds, and publishes an attested nightly prerelease. Verify
+and install from the zip as upstream's docs/install.md describes, with
+`-R comebruchet-cpu/Insomnia` in the attestation command.
