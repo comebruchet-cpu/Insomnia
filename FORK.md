@@ -33,6 +33,12 @@ Upstream docs apply unless this file says otherwise.
   session the agent ended by its deadline or by the battery floor, `pmset
   sleepnow` when `ioreg` says the lid is closed and `system_profiler` lists no
   external display. Never after `--force` (install.sh and uninstall.sh).
+- **Digits by key code** (`DurationInput.digit(keyCode:characters:)`,
+  `StatusItemController.handleKey`). The pills read the digit row and the
+  keypad by key code. Upstream read the typed character, so on a French AZERTY
+  layout a bare press of the top row (`& é " ' ( § è ! ç à`) was swallowed in
+  silence and Enter on empty pills started the 4-hour default. The letters
+  d/h/m and everything else still go by character. Test: `DurationKeyTests.swift`.
 - Tests for both script changes in `RecoveryScriptTests.swift` (fakes for
   `pmset -g batt`, `pmset sleepnow`, `ioreg`, `system_profiler`).
 - Install-time configuration, not code: `freezeList` emptied in config.json, so

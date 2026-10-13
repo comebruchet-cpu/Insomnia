@@ -848,12 +848,14 @@ final class StatusItemController: NSObject {
         default:
             break
         }
-        guard let chars = event.charactersIgnoringModifiers, chars.count == 1, let ch = chars.first else {
-            return false
-        }
-        if let digit = ch.wholeNumberValue, ch.isASCII {
+        // The digit row and the keypad go by key code (see `DurationInput.digit`):
+        // a French layout types punctuation on a bare press of the top row.
+        if let digit = DurationInput.digit(keyCode: event.keyCode, characters: event.charactersIgnoringModifiers) {
             typeDigit(digit)
             return true
+        }
+        guard let chars = event.charactersIgnoringModifiers, chars.count == 1, let ch = chars.first else {
+            return false
         }
         switch ch.lowercased() {
         case "d": focus(.days); return true

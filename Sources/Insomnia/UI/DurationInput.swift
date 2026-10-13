@@ -205,3 +205,44 @@ enum DurationParser {
         return TimeInterval(total)
     }
 }
+
+// MARK: Keys
+
+extension DurationInput {
+    /// The digit a key press enters into a pill, or nil when it enters none.
+    ///
+    /// The digit row and the keypad are read by key code, not by the character
+    /// the layout types for them: on a French AZERTY layout a bare press of
+    /// the top row types `& é " ' ( § è ! ç à` and digits need Shift, so a
+    /// character-only reading swallowed every bare press in silence. Any other
+    /// key counts only when it types an ASCII digit itself (a layout that
+    /// keeps its digits elsewhere, an input method). Pure: no AppKit.
+    static func digit(keyCode: UInt16, characters: String?) -> Int? {
+        switch keyCode {
+        case 18: return 1 // kVK_ANSI_1
+        case 19: return 2
+        case 20: return 3
+        case 21: return 4
+        case 23: return 5
+        case 22: return 6
+        case 26: return 7
+        case 28: return 8
+        case 25: return 9
+        case 29: return 0
+        case 83: return 1 // kVK_ANSI_Keypad1
+        case 84: return 2
+        case 85: return 3
+        case 86: return 4
+        case 87: return 5
+        case 88: return 6
+        case 89: return 7
+        case 91: return 8
+        case 92: return 9
+        case 82: return 0
+        default: break
+        }
+        guard let characters, characters.count == 1, let ch = characters.first, ch.isASCII,
+              let value = ch.wholeNumberValue else { return nil }
+        return value
+    }
+}
