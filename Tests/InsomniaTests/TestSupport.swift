@@ -733,7 +733,7 @@ final class FakeClosedLidSleep: ClosedLidSleeping, @unchecked Sendable {
     private let lock = NSLock()
     private let sleepGuard: FakeSleepGuard
     private let recoveryLock: URL
-    private var _causesSleep: Bool? = true
+    private var _externalDisplays: Int? = 0
     private var _requests: [Request] = []
 
     init(sleepGuard: FakeSleepGuard, recoveryLock: URL) {
@@ -741,13 +741,16 @@ final class FakeClosedLidSleep: ClosedLidSleeping, @unchecked Sendable {
         self.recoveryLock = recoveryLock
     }
 
-    var causesSleep: Bool? {
-        get { lock.withLock { _causesSleep } }
-        set { lock.withLock { _causesSleep = newValue } }
+    /// Active displays other than the built-in panel, nil for a display
+    /// list that cannot be read.
+    var externalDisplays: Int? {
+        get { lock.withLock { _externalDisplays } }
+        set { lock.withLock { _externalDisplays = newValue } }
     }
     var requests: [Request] { lock.withLock { _requests } }
 
-    func lidCloseCausesSleep() -> Bool? { causesSleep }
+    func lidCloseCausesSleep() -> Bool? { true }
+    func activeExternalDisplays() -> Int? { externalDisplays }
 
     func requestSleep() throws {
         let disabled = sleepGuard.sleepDisabled

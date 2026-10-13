@@ -656,7 +656,9 @@ and the sleep guard refuses it. `disablesleep 0` only clears the kernel's flag
 (`kPowerEventUserDisabledSleep` in xnu's `IOPMrootDomain.cpp`) and does not
 look at the lid again. So these ends and the timer end owe a sleep, and
 Insomnia calls `IOPMSleepSystem` (no root needed) if `AppleClamshellState`
-and `AppleClamshellCausesSleep` are both true. It asks after an end, and only
+is true and `CGGetActiveDisplayList` lists no display other than the built-in
+panel (`AppleClamshellCausesSleep` is logged, not trusted: it read No with the
+lid open and no monitor on a MacBook Pro M5 under macOS 27.0.1). It asks after an end, and only
 with no session, no lifecycle operation queued or running, and no `sudo pmset`
 left running. macOS refuses while sleep is still disabled, as after a failed
 `disablesleep 0` that the recovery agent retries, so a refused or postponed

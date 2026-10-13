@@ -183,6 +183,12 @@ MKTEMP=/usr/bin/mktemp
 # BSD stat: GNU coreutils stat, first on PATH in many Homebrew setups, reads
 # -f as --file-system, so `-f %i` and `-f %z` print no inode or size.
 STAT=/usr/bin/stat
+# Fork (2026-10-13): the battery floor while the app is gone and the
+# closed-lid sleep below read these. Fixed paths like the others; the tests
+# patch them in their private copy.
+PGREP=/usr/bin/pgrep
+IOREG=/usr/sbin/ioreg
+SYSTEM_PROFILER=/usr/sbin/system_profiler
 # The installed app binary, for the microsecond identity check of
 # frozenProcesses entries (see above), and the bundle's Info.plist, which
 # must declare InsomniaResumeFrozenVersion RESUME_FROZEN_VERSION before the
@@ -218,6 +224,7 @@ SESSION="$APP_SUPPORT/session.json"
 STATE="$APP_SUPPORT/state.json"
 LOCK="$APP_SUPPORT/.recovery.lock"
 LOG="$LOG_DIR/insomnia.log"
+CONFIG="$APP_SUPPORT/config.json"
 
 log() { # level message
   "$MKDIR" -p "$LOG_DIR"
@@ -904,9 +911,87 @@ if [[ -e "$SESSION" ]]; then
   fi
 fi
 
+# --- Battery floor while the app is gone (fork) ------------------------------
+# A valid session keeps sleep disabled until its deadline. While the app
+# runs it enforces the battery end floor itself (FloorRules); once it is
+# gone (crash, force quit, logout), nothing does, and a closed Mac on
+# battery runs until the deadline or until the battery dies. So a valid
+# session is ended here, as an expired one, when no Insomnia process runs
+# and the Mac draws from its battery below config.json's endFloor (the
+# app's default, 10, when the file or the key is missing; 0 turns the end
+# off). The session file goes with the end, so a relaunch does not resume
+# it. Anything unreadable (pgrep, `pmset -g batt`, the percentage) leaves
+# the session alone: it was asked for, and the next run reads again. Heat
+# is not read: the thermal state is not readable from a shell without
+# root, so that stays the app's job.
+battery_floor=10
+battery_pct=""
+battery_floor_breached() {
+  local v batt
+  if [[ -f "$CONFIG" ]]; then
+    v="$(extract "$CONFIG" endFloor || true)"
+    if [[ "$v" =~ ^[0-9]+$ ]]; then battery_floor="$v"; fi
+  fi
+  (( battery_floor > 0 )) || return 1
+  if "$PGREP" -x Insomnia >/dev/null 2>&1; then return 1; fi
+  batt="$("$PMSET" -g batt 2>/dev/null)" || return 1
+  [[ "$batt" == *"'Battery Power'"* ]] || return 1
+  battery_pct="$(printf '%s\n' "$batt" | sed -nE 's/^.*[[:space:]]([0-9]{1,3})%;.*$/\1/p' | head -n 1)"
+  [[ "$battery_pct" =~ ^[0-9]+$ ]] || return 1
+  (( battery_pct < battery_floor ))
+}
+# Whether this run owes the closed-lid sleep below: the session ended by
+# its deadline or by the battery floor, never by --force (install.sh and
+# uninstall.sh end a session on purpose, with the person at the Mac).
+sleep_owed=0
 if [[ "$session_state" == valid ]] && (( force == 0 )); then
-  exit 0
+  if battery_floor_breached; then
+    log warn "session valid until $ends_at, but no Insomnia process runs and the Mac draws from its battery at ${battery_pct}%, below the ${battery_floor}% end floor; ending it now"
+    session_state=expired
+    sleep_owed=1
+  else
+    exit 0
+  fi
+elif [[ "$session_state" == expired ]] && (( force == 0 )); then
+  sleep_owed=1
 fi
+
+# --- Closed-lid sleep (fork) ---------------------------------------------------
+# macOS asks for a closed lid's sleep once, at the close, and the sleep
+# guard refused it; `disablesleep 0` does not make it ask again (upstream
+# issue #94: a Mac left closed ran five more hours after its session). So a
+# session this run ended by its deadline or by the battery floor is
+# followed by `pmset sleepnow`, which needs no root, when the lid is closed
+# and no display other than the built-in panel is listed: a Mac in
+# clamshell mode on a monitor is in use. Only once everything journaled is
+# undone and published: a request with the guard still on is refused, and
+# a dirty journal is retried next minute anyway. Anything unreadable means
+# no sleep: a Mac left awake is the state this fork inherited; one put to
+# sleep under someone's hands is worse.
+closed_lid_sleep_if_owed() {
+  local lid displays external
+  (( sleep_owed == 1 )) || return 0
+  lid="$("$IOREG" -r -n IOPMrootDomain -d 1 2>/dev/null | sed -nE 's/^.*"AppleClamshellState" = (Yes|No).*$/\1/p' | head -n 1)"
+  if [[ "$lid" != Yes ]]; then
+    log info "session ended with the lid ${lid:-unreadable}; no sleep requested"
+    return 0
+  fi
+  displays="$("$SYSTEM_PROFILER" SPDisplaysDataType 2>/dev/null)" || displays=""
+  if [[ -z "$displays" ]]; then
+    log info "session ended with the lid closed, but the display list could not be read; no sleep requested"
+    return 0
+  fi
+  external="$(printf '%s\n' "$displays" | grep -E '^[[:space:]]*Connection Type:' | grep -vc 'Internal' || true)"
+  if [[ "$external" =~ ^[0-9]+$ ]] && (( external > 0 )); then
+    log info "session ended with the lid closed and $external external display(s) connected (clamshell mode); no sleep requested"
+    return 0
+  fi
+  if "$PMSET" sleepnow >/dev/null 2>&1; then
+    log info "session ended with the lid closed and no external display; sleep requested (pmset sleepnow)"
+  else
+    log error "session ended with the lid closed, but 'pmset sleepnow' failed; the Mac stays awake until the lid opens"
+  fi
+}
 
 # --- Read the journal --------------------------------------------------------
 # journal_state: missing | malformed | clean | dirty
@@ -1039,6 +1124,7 @@ if [[ "$journal_state" != dirty ]]; then
     [[ -n "$refused_note" ]] && log info "$refused_note"
     "$RM" -f "$SESSION"
   fi
+  closed_lid_sleep_if_owed
   exit 0
 fi
 
@@ -1486,4 +1572,5 @@ case "$session_state" in
   malformed|unreadable) quarantine_session || exit 1 ;;
   *)                    "$RM" -f "$SESSION" ;;
 esac
+closed_lid_sleep_if_owed
 exit 0

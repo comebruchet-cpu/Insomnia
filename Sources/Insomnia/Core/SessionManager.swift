@@ -1397,12 +1397,30 @@ final class SessionManager {
         guard lifecycleOperations == 0, unfinishedCommand?.isRunning != true else {
             return askForClosedLidSleepLater()
         }
-        // False with an external display in clamshell mode.
-        guard clamshell() == true, closedLidSleep.lidCloseCausesSleep() == true else {
-            Log.info("session end: the lid is open, or macOS keeps this closed Mac awake, so no sleep is requested")
+        guard clamshell() == true else {
+            Log.info("session end: the lid is open, so no sleep is requested")
             closedLidSleepOwed = false
             return
         }
+        // A Mac in clamshell mode on a monitor is in use. The display list
+        // decides, not `AppleClamshellCausesSleep`: that key read No with
+        // the lid open and no monitor on the Mac this fork was made for, so
+        // a sleep gated on it would never be asked. It is logged for the
+        // record.
+        switch closedLidSleep.activeExternalDisplays() {
+        case 0?:
+            break
+        case let n?:
+            Log.info("session end with the lid closed: \(n) external display(s) active (clamshell mode), so no sleep is requested")
+            closedLidSleepOwed = false
+            return
+        case nil:
+            Log.info("session end with the lid closed: the display list could not be read, so no sleep is requested")
+            closedLidSleepOwed = false
+            return
+        }
+        let causes = closedLidSleep.lidCloseCausesSleep().map { String($0) } ?? "unreadable"
+        Log.info("session end with the lid closed and no external display (AppleClamshellCausesSleep reads \(causes)); asking macOS to sleep")
         do {
             try closedLidSleep.requestSleep()
             closedLidSleepOwed = false

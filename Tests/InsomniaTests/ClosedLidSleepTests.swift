@@ -99,16 +99,16 @@ final class ClosedLidSleepTests: XCTestCase {
     /// mode), or its answer cannot be read: no request, so a Mac in use on
     /// an external display is never put to sleep.
     func testFloorEndWhenMacOSKeepsAClosedMacAwakeAsksNothing() async {
-        for causesSleep in [false, nil] as [Bool?] {
+        for displays in [1, nil] as [Int?] {
             let h = Harness()
             defer { h.home.destroy() }
             let m = await sessionWithTheLidClosed(h)
-            h.lidSleep.causesSleep = causesSleep
+            h.lidSleep.externalDisplays = displays
 
             let outcome = await m.end(reason: .thermalCritical)
 
             XCTAssertEqual(outcome, .restored)
-            XCTAssertEqual(h.lidSleep.requests, [], "causes sleep \(String(describing: causesSleep))")
+            XCTAssertEqual(h.lidSleep.requests, [], "external displays \(String(describing: displays))")
         }
     }
 

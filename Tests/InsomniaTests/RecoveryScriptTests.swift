@@ -136,7 +136,7 @@ final class RecoveryScriptTests: XCTestCase {
         let r = try fx.run(fx.backstop)
 
         XCTAssertEqual(r.status, 0, r.stderr)
-        XCTAssertEqual(fx.calls(), [])
+        XCTAssertEqual(fx.calls(), ["pgrep -x Insomnia", "pmset -g batt"], "the fork reads the battery floor; nothing privileged runs")
         XCTAssertEqual(try String(contentsOf: fx.state, encoding: .utf8), dirty)
         XCTAssertTrue(fx.exists(fx.session))
     }
@@ -150,6 +150,171 @@ final class RecoveryScriptTests: XCTestCase {
         XCTAssertEqual(r.status, 0, r.stderr)
         XCTAssertEqual(fx.calls(), ["sudo -n \(fx.fakePmset) -a disablesleep 0"])
         XCTAssertEqual(try fx.stateJSON()["sleepDisabledByUs"] as? Bool, false)
+        XCTAssertFalse(fx.exists(fx.session))
+    }
+
+    // MARK: - Fork: battery floor while the app is gone
+
+    private let dirtySleep = #"{"sleepDisabledByUs":true,"lowPowerSetByUs":false,"frozenProcesses":[],"dockerFrozen":false}"#
+
+    /// The app enforces the battery floor while it runs; with the app gone,
+    /// the backstop ends a valid session on battery below the floor, as an
+    /// expired one, and the session file goes so a relaunch does not resume it.
+    func testValidSessionOnBatteryBelowTheFloorWithTheAppGoneIsEnded() throws {
+        try fx.writeSession(endsAt: Date(timeIntervalSinceNow: 3600))
+        try fx.writeState(dirtySleep)
+        fx.setBattery(percent: 7, onBattery: true)
+
+        let r = try fx.run(fx.backstop)
+
+        XCTAssertEqual(r.status, 0, r.stderr + fx.log())
+        XCTAssertEqual(fx.calls(), ["pgrep -x Insomnia", "pmset -g batt", "sudo -n \(fx.fakePmset) -a disablesleep 0", "ioreg -r -n IOPMrootDomain -d 1"])
+        XCTAssertEqual(try fx.stateJSON()["sleepDisabledByUs"] as? Bool, false)
+        XCTAssertFalse(fx.exists(fx.session), "a relaunch must not resume the session")
+        XCTAssertTrue(fx.log().contains("below the 10% end floor"), fx.log())
+    }
+
+    func testValidSessionOnBatteryBelowTheFloorWithTheAppRunningIsLeftAlone() throws {
+        try fx.writeSession(endsAt: Date(timeIntervalSinceNow: 3600))
+        try fx.writeState(dirtySleep)
+        fx.setBattery(percent: 7, onBattery: true)
+        fx.setMode("pgrep", "0")
+
+        let r = try fx.run(fx.backstop)
+
+        XCTAssertEqual(r.status, 0, r.stderr)
+        XCTAssertEqual(fx.calls(), ["pgrep -x Insomnia"], "the running app owns the floor; the battery is not even read")
+        XCTAssertTrue(fx.exists(fx.session))
+        XCTAssertEqual(try fx.stateJSON()["sleepDisabledByUs"] as? Bool, true)
+    }
+
+    func testValidSessionOnACPowerOrAboveTheFloorIsLeftAlone() throws {
+        for (label, percent, onBattery) in [("on AC at 5%", 5, false), ("on battery at 10%", 10, true), ("on battery at 50%", 50, true)] {
+            let f = try ScriptFixture()
+            defer { f.destroy() }
+            try f.writeSession(endsAt: Date(timeIntervalSinceNow: 3600))
+            try f.writeState(dirtySleep)
+            f.setBattery(percent: percent, onBattery: onBattery)
+
+            let r = try f.run(f.backstop)
+
+            XCTAssertEqual(r.status, 0, label + r.stderr)
+            XCTAssertEqual(f.calls(), ["pgrep -x Insomnia", "pmset -g batt"], label)
+            XCTAssertTrue(f.exists(f.session), label)
+        }
+    }
+
+    func testBatteryFloorComesFromConfigAndZeroTurnsItOff() throws {
+        try fx.writeConfig(#"{"endFloor":30}"#)
+        try fx.writeSession(endsAt: Date(timeIntervalSinceNow: 3600))
+        try fx.writeState(dirtySleep)
+        fx.setBattery(percent: 25, onBattery: true)
+        XCTAssertEqual(try fx.run(fx.backstop).status, 0, fx.log())
+        XCTAssertEqual(fx.calls().prefix(3), ["pgrep -x Insomnia", "pmset -g batt", "sudo -n \(fx.fakePmset) -a disablesleep 0"])
+        XCTAssertFalse(fx.exists(fx.session))
+        XCTAssertTrue(fx.log().contains("below the 30% end floor"), fx.log())
+
+        let off = try ScriptFixture()
+        defer { off.destroy() }
+        try off.writeConfig(#"{"endFloor":0}"#)
+        try off.writeSession(endsAt: Date(timeIntervalSinceNow: 3600))
+        try off.writeState(dirtySleep)
+        off.setBattery(percent: 2, onBattery: true)
+        XCTAssertEqual(try off.run(off.backstop).status, 0)
+        XCTAssertEqual(off.calls(), [], "an end floor of 0 reads nothing")
+        XCTAssertTrue(off.exists(off.session))
+    }
+
+    func testUnreadableBatteryLeavesAValidSessionAlone() throws {
+        for text in ["", "garbage\n", "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\tN/A; discharging present: true\n"] {
+            let f = try ScriptFixture()
+            defer { f.destroy() }
+            try f.writeSession(endsAt: Date(timeIntervalSinceNow: 3600))
+            try f.writeState(dirtySleep)
+            f.setBatteryText(text)
+
+            XCTAssertEqual(try f.run(f.backstop).status, 0, text)
+            XCTAssertEqual(f.calls(), ["pgrep -x Insomnia", "pmset -g batt"], text)
+            XCTAssertTrue(f.exists(f.session), text)
+        }
+    }
+
+    // MARK: - Fork: closed-lid sleep after a deadline or battery end
+
+    func testExpiredSessionWithTheLidClosedAndNoExternalDisplayPutsTheMacToSleep() throws {
+        try fx.writeSession(endsAt: Date(timeIntervalSinceNow: -60))
+        try fx.writeState(dirtySleep)
+        fx.setLid(closed: true)
+
+        let r = try fx.run(fx.backstop)
+
+        XCTAssertEqual(r.status, 0, r.stderr + fx.log())
+        XCTAssertEqual(fx.calls(), [
+            "sudo -n \(fx.fakePmset) -a disablesleep 0",
+            "ioreg -r -n IOPMrootDomain -d 1",
+            "system_profiler SPDisplaysDataType",
+            "pmset sleepnow",
+        ], "sleep is asked last, after the guard is off and the journal published")
+        XCTAssertFalse(fx.exists(fx.session))
+        XCTAssertTrue(fx.log().contains("sleep requested (pmset sleepnow)"), fx.log())
+    }
+
+    func testExpiredSessionWithACleanJournalAndTheLidClosedStillSleeps() throws {
+        try fx.writeSession(endsAt: Date(timeIntervalSinceNow: -60))
+        try fx.writeState(#"{"sleepDisabledByUs":false,"lowPowerSetByUs":false,"frozenProcesses":[],"dockerFrozen":false}"#)
+        fx.setLid(closed: true)
+
+        let r = try fx.run(fx.backstop)
+
+        XCTAssertEqual(r.status, 0, r.stderr)
+        XCTAssertEqual(fx.calls(), ["ioreg -r -n IOPMrootDomain -d 1", "system_profiler SPDisplaysDataType", "pmset sleepnow"])
+        XCTAssertFalse(fx.exists(fx.session))
+    }
+
+    func testExpiredSessionWithTheLidOpenOrAnExternalDisplayDoesNotSleep() throws {
+        for (label, closed, external, profilerMode) in [("lid open", false, 0, ""), ("external display", true, 1, ""), ("display list unreadable", true, 0, "fail")] {
+            let f = try ScriptFixture()
+            defer { f.destroy() }
+            try f.writeSession(endsAt: Date(timeIntervalSinceNow: -60))
+            try f.writeState(dirtySleep)
+            f.setLid(closed: closed)
+            f.setExternalDisplays(external)
+            if !profilerMode.isEmpty { f.setMode("system_profiler", profilerMode) }
+
+            XCTAssertEqual(try f.run(f.backstop).status, 0, label)
+            XCTAssertFalse(f.calls().contains("pmset sleepnow"), "\(label): \(f.calls())")
+            XCTAssertFalse(f.exists(f.session), label)
+            XCTAssertTrue(f.log().contains("no sleep requested"), "\(label): \(f.log())")
+        }
+    }
+
+    func testForcedEndAndFailedUndoNeverSleep() throws {
+        try fx.writeSession(endsAt: Date(timeIntervalSinceNow: 3600))
+        try fx.writeState(dirtySleep)
+        fx.setLid(closed: true)
+        XCTAssertEqual(try fx.run(fx.backstop, ["--force"]).status, 0)
+        XCTAssertFalse(fx.calls().contains("pmset sleepnow"), "install.sh and uninstall.sh end sessions on purpose: \(fx.calls())")
+
+        let failed = try ScriptFixture()
+        defer { failed.destroy() }
+        try failed.writeSession(endsAt: Date(timeIntervalSinceNow: -60))
+        try failed.writeState(dirtySleep)
+        failed.setLid(closed: true)
+        failed.setMode("sudo", "fail")
+        XCTAssertNotEqual(try failed.run(failed.backstop).status, 0)
+        XCTAssertFalse(failed.calls().contains("pmset sleepnow"), "a request with the guard still on is refused, and the retry comes next minute: \(failed.calls())")
+    }
+
+    func testBatteryFloorEndWithTheLidClosedSleeps() throws {
+        try fx.writeSession(endsAt: Date(timeIntervalSinceNow: 3600))
+        try fx.writeState(dirtySleep)
+        fx.setBattery(percent: 4, onBattery: true)
+        fx.setLid(closed: true)
+
+        let r = try fx.run(fx.backstop)
+
+        XCTAssertEqual(r.status, 0, r.stderr)
+        XCTAssertEqual(fx.calls().last, "pmset sleepnow", "\(fx.calls())")
         XCTAssertFalse(fx.exists(fx.session))
     }
 
@@ -832,7 +997,7 @@ final class RecoveryScriptTests: XCTestCase {
         let r = try fx.run(fx.backstop)
 
         XCTAssertEqual(r.status, 0, r.stderr + fx.log())
-        XCTAssertEqual(fx.calls(), [])
+        XCTAssertEqual(fx.calls(), ["pgrep -x Insomnia", "pmset -g batt"], "the fork reads the battery floor; nothing privileged runs")
         XCTAssertTrue(fx.exists(fx.session))
         XCTAssertEqual(try fx.stateJSON()["sleepDisabledByUs"] as? Bool, true)
     }
@@ -6488,6 +6653,9 @@ private final class ScriptFixture {
             "DEFAULTS": bin.appendingPathComponent("defaults").path,
             "DATE": bin.appendingPathComponent("date").path,
             "MV": bin.appendingPathComponent("mv").path,
+            "PGREP": bin.appendingPathComponent("pgrep").path,
+            "IOREG": bin.appendingPathComponent("ioreg").path,
+            "SYSTEM_PROFILER": bin.appendingPathComponent("system_profiler").path,
             "LOCK_TIMEOUT_SECONDS": "1",
             "COMMAND_TIMEOUT_SECONDS": "1",
             "KILL_GRACE_SECONDS": "1",
@@ -6755,9 +6923,38 @@ private final class ScriptFixture {
           *) exit 1 ;;
         esac
         """)
+        // pmset: a direct setting change is refused (exit 99), as pmset
+        // itself refuses one without root. Two read-only forms the fork's
+        // backstop makes are answered: `-g batt` prints batt.txt (default:
+        // on AC power, charged), and `sleepnow` is recorded and succeeds.
         try writeFake("pmset", """
+        if [[ "${1:-}" == -g && "${2:-}" == batt ]]; then
+          printf 'pmset -g batt\\n' >> "\(calls)"
+          if [[ -f "\(r)/batt.txt" ]]; then cat "\(r)/batt.txt"; else printf "Now drawing from 'AC Power'\\n -InternalBattery-0 (id=1)\\t100%%; charged; 0:00 remaining present: true\\n"; fi
+          exit 0
+        fi
+        if [[ "${1:-}" == sleepnow ]]; then printf 'pmset sleepnow\\n' >> "\(calls)"; exit 0; fi
         printf 'pmset DIRECT %s\\n' "$*" >> "\(calls)"
         exit 99
+        """)
+        // ioreg: `-r -n IOPMrootDomain -d 1` prints the clamshell lines the
+        // fork's backstop reads; ioreg.lid holds Yes or No (default No).
+        try writeFake("ioreg", """
+        printf 'ioreg %s\\n' "$*" >> "\(calls)"
+        lid="$(cat "\(r)/ioreg.lid" 2>/dev/null || echo No)"
+        printf '+-o IOPMrootDomain  <class IOPMrootDomain>\\n    {\\n      "AppleClamshellState" = %s\\n      "AppleClamshellCausesSleep" = %s\\n    }\\n' "$lid" "$lid"
+        exit 0
+        """)
+        // system_profiler: the display list as `SPDisplaysDataType` prints
+        // it: the built-in panel, then displays.external (default 0) more
+        // on HDMI. Mode "fail" prints nothing and exits 1.
+        try writeFake("system_profiler", """
+        printf 'system_profiler %s\\n' "$*" >> "\(calls)"
+        if [[ "$(cat "\(r)/system_profiler.mode" 2>/dev/null)" == fail ]]; then exit 1; fi
+        n="$(cat "\(r)/displays.external" 2>/dev/null || echo 0)"
+        printf 'Graphics/Displays:\\n\\n    Apple M5:\\n\\n      Displays:\\n        Color LCD:\\n          Display Type: Built-in Liquid Retina XDR Display\\n          Online: Yes\\n          Connection Type: Internal\\n'
+        for (( i = 0; i < n; i++ )); do printf '        DELL U2723QE:\\n          Online: Yes\\n          Connection Type: HDMI\\n'; done
+        exit 0
         """)
         // swift / codesign: install.sh's build and signing steps, redirected
         // to a fake binary inside the fixture.
@@ -7174,6 +7371,33 @@ private final class ScriptFixture {
 
     func setMode(_ name: String, _ value: String) {
         try? value.write(to: root.appendingPathComponent("\(name).mode"), atomically: true, encoding: .utf8)
+    }
+
+    /// What the fake `pmset -g batt` prints: the two lines pmset prints,
+    /// at `percent`, drawing from the battery or from AC power.
+    func setBattery(percent: Int, onBattery: Bool) {
+        let source = onBattery ? "Battery Power" : "AC Power"
+        let state = onBattery ? "discharging; 2:00 remaining" : "charging; 0:30 remaining"
+        setBatteryText("Now drawing from '\(source)'\n -InternalBattery-0 (id=1)\t\(percent)%; \(state) present: true\n")
+    }
+
+    /// What the fake `pmset -g batt` prints, verbatim.
+    func setBatteryText(_ text: String) {
+        try? text.write(to: root.appendingPathComponent("batt.txt"), atomically: true, encoding: .utf8)
+    }
+
+    /// What the fake ioreg reports for AppleClamshellState.
+    func setLid(closed: Bool) {
+        try? (closed ? "Yes" : "No").write(to: root.appendingPathComponent("ioreg.lid"), atomically: true, encoding: .utf8)
+    }
+
+    /// How many displays beyond the built-in panel the fake system_profiler lists.
+    func setExternalDisplays(_ count: Int) {
+        try? String(count).write(to: root.appendingPathComponent("displays.external"), atomically: true, encoding: .utf8)
+    }
+
+    func writeConfig(_ json: String) throws {
+        try json.write(to: config, atomically: true, encoding: .utf8)
     }
 
     /// Which message the fake `defaults` prints for an absent key (see its
