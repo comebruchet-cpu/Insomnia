@@ -7396,10 +7396,6 @@ private final class ScriptFixture {
         try? String(count).write(to: root.appendingPathComponent("displays.external"), atomically: true, encoding: .utf8)
     }
 
-    func writeConfig(_ json: String) throws {
-        try json.write(to: config, atomically: true, encoding: .utf8)
-    }
-
     /// Which message the fake `defaults` prints for an absent key (see its
     /// comment): "27-key", "27-domain", or "26" (the default) for macOS
     /// 26's. Any other wording makes the fake fail, so a typo cannot pass
