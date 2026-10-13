@@ -122,7 +122,10 @@ final class EndSessionMenuTests: XCTestCase {
         try selectEnd(menu(control))
         await settleQueuedRequests()
         await gate.open()
-        let ended = await waitUntil { !manager.isActive && control.model.phase == .idle }
+        // `isActive` turns false at the start of the end, before the undo
+        // runs, so the journal has to read clean too, or a slow runner
+        // (seen on macOS 27 in CI) checks the sleep guard mid-restore.
+        let ended = await waitUntil { !manager.isActive && !manager.state.isDirty && control.model.phase == .idle }
         XCTAssertTrue(ended)
         XCTAssertFalse(h.guardFake.sleepDisabled)
         XCTAssertNil(try h.store.loadSession())
